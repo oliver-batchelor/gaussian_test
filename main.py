@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 from typing import Tuple
 import taichi as ti
 import taichi.math as tm
@@ -51,52 +52,71 @@ def splat_transforms(splats:ti.template(), transforms:ti.template()):
     rotation = quat_to_mat(splat.q)
 
     m = tm.mat4(0)
-    m[0:3, 0:3] = rotation @ scaling(splat.scale)
+    m[0:3, 0:3] = rotation @ scaling(splat.scale * 3)
     m[0:3, 3] = splat.p
     m[3, 3] = 1.0
 
     transforms[i] = m
 
     
-def intrinsic_matrix(hfov, window):
+def intrinsic_matrix(hfov_deg, window):
     width, height = window.get_window_shape()
+    hfov = math.radians(hfov_deg)
 
-    fx = 1.0 / np.tan(hfov * 0.5 * np.pi / 180.0)
-    fy = fx * (height / width)
+    fx = 0.5 * width / np.tan(hfov * 0.5)
+
+
     cx = width * 0.5
     cy = height * 0.5
 
     return np.array([
         [fx, 0, cx],
-        [0, fy, cy],
+        [0, fx, cy],
         [0, 0, 1.0]
     ])
    
 @ti.kernel
-def draw_splats(splats:ti.template(), image:ti.template(), intrinsic:tm.mat3, view:tm.mat4):
+def draw_splats(splats:ti.template(), image:ti.template(), 
+                intrinsic:tm.mat3, view:tm.mat4, near:ti.f32):
   camera = Camera(image.shape[:2], intrinsic)
+  w, h = image.shape[:2]
+  upper = tm.ivec2(w - 1, h - 1) 
 
-  for p in ti.grouped(ti.ndrange(image.shape[0], image.shape[1])):
-    image[p] = 0.0
+  # for p in ti.grouped(ti.ndrange(image.shape[0], image.shape[1])):
+  #   image[p] = 0.0
+
 
   for i in splats:
     splat2d = project_splat(splats[i], camera, view)
-    if splat2d.depth < 0.0:
+    if splat2d.depth < near:
       continue
 
-    radius = 50
-    lower = ti.max(ti.floor(splat2d.uv - radius, ti.i32), 0)
-    upper = ti.min(ti.ceil(splat2d.uv + radius, ti.i32), tm.ivec2(image.shape[:2]) - 1)
-    # print(i, splat2d.uv, splat2d.radius, upper-lower)
+    lower = ti.math.clamp(ti.floor(splat2d.uv - splat2d.radius, ti.i32), 0, upper)
+    upper = ti.math.clamp(ti.ceil(splat2d.uv + splat2d.radius, ti.i32), 0, upper)
     
-    for x, y in ti.ndrange((lower.x, lower.y), (upper.x, upper.y)):
+    for x, y in ti.ndrange((lower.x, upper.x), (lower.y, upper.y)):
       xy = ti.math.vec2(x, y)
       density = density_from_conic(xy, splat2d.uv, splat2d.conic)
 
-      image[x, y] = splat2d.color #+= splat2d.color * density * splat2d.opacity
+      image[x, y] = tm.mix(image[x, y], splat2d.color, density * splat2d.opacity)
+
+
+@ti.kernel
+def make_checkerboard(image:ti.template(), size:ti.template()):
+  for i, j in ti.ndrange(image.shape[0], image.shape[1]):
+    image[i, j] = ((i // size + j // size) % 2) * 0.25
+
+def diag_matrix(v):
+  m = tm.mat4(0)
+  m[0, 0] = v[0]
+  m[1, 1] = v[1]
+  m[2, 2] = v[2]
+  m[3, 3] = v[3]
+  return m
+
 
 def main():
-  ti.init(arch=ti.cuda, debug=True)
+  ti.init(arch=ti.cuda)
 
   options = Options()
 
@@ -106,10 +126,10 @@ def main():
   camera = ti.ui.Camera()
 
   camera.up(0, 1, 0)
-  camera.position(0, 0, 10)
+  camera.position(0, 0, 4)
   # camera.lookat(0, 0, 0)
 
-  hfov = 60
+  hfov = 75
   camera.fov(hfov)
 
   w, h = window.get_window_shape()
@@ -129,7 +149,12 @@ def main():
   while window.running:
       intrinsic = intrinsic_matrix(hfov, window)
 
-      draw_splats(splats, image,  intrinsic, camera.get_view_matrix())
+      m = diag_matrix([1, 1, -1, 1]) @ tm.mat4(camera.get_view_matrix()).transpose()
+
+
+      make_checkerboard(image, 32)
+      draw_splats(splats, image,  intrinsic, m, near=0.5)
+      # print(camera.get_view_matrix().T)
 
       scene.ambient_light([0.2, 0.2, 0.2])
       scene.point_light(pos=[0, 10, 10], color=[1.0, 1.0, 1.0])

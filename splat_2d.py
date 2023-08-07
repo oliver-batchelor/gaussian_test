@@ -4,7 +4,7 @@ import taichi.math as tm
 
 from camera import Camera
 from splat_3d import AABox, Splat3D, to_covariance
-from transform import quat_to_mat
+from transform import quat_to_mat, scaling
 
 @ti.func
 def cov_to_conic_radius(
@@ -68,6 +68,7 @@ def project_splat(
     camera: Camera,
     world_to_camera: tm.mat4,
 ) -> Splat2D:
+  
       
   p = (world_to_camera @ tm.vec4(splat.p, 1.0)).xyz
   f = camera.focal_length()
@@ -77,9 +78,8 @@ def project_splat(
     0.0, f.y / p.z, -(f.y * p.y) / (p.z * p.z),
     0, 0, 0)
   
-  scaling = ti.Matrix.cols([splat.scale, splat.scale, splat.scale])
-
-  axes = scaling * (world_to_camera[:3, :3] @ quat_to_mat(splat.q))
+  scale = scaling(splat.scale)
+  axes = (world_to_camera[:3, :3].inverse().transpose() @ (quat_to_mat(splat.q) @ scale))
 
 
   # J @ axes @ axes^T @ J^T
@@ -87,6 +87,8 @@ def project_splat(
   cov_2d = m @ m.transpose() 
 
   uv = camera.image_t_camera @ p
+
+  print(cov_2d)
 
   conic, radius = cov_to_conic_radius(cov_2d[:2,:2])
 

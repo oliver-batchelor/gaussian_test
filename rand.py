@@ -19,9 +19,9 @@ def random_splats(n=10):
 
   for i in range(n):
     splat = Splat3D(
-      p = tm.vec3(np.random.uniform(-10, 10, size=3)),
+      p = tm.vec3(np.random.uniform(-2, 2, size=3)),
       q = tm.vec4(random_rotation()),
-      scale = tm.vec3(np.random.uniform(0.5, 3, size=3)),
+      scale = tm.vec3(np.random.uniform(0.01, 0.1, size=3)),
       color = tm.vec3(np.random.uniform(0, 1, size=3)),
       opacity = 1.0)
 
