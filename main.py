@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import Tuple
 import taichi as ti
 import taichi.math as tm
@@ -8,7 +9,7 @@ from camera import Camera
 
 from rand import random_splats
 from scipy.spatial.transform import Rotation as R
-from splat_2d import project_splat
+from splat_2d import Splat2D, density_from_conic, project_splat
 
 from transform import quat_to_mat, scaling
 
@@ -29,12 +30,18 @@ def sphere_mesh(n, radius=1.0):
   return vertices_field, indices_field
 
 
-def show_options(window):
-    some_int_type_value = 0
+@dataclass
+class Options:
+   show_splats: bool = False
+
+
+def show_options(window, options):
 
     window.GUI.begin("Display Panel", 0.05, 0.1, 0.2, 0.15)
-    display_mode = window.GUI.slider_int("Value Range", some_int_type_value, 0, 5)
+    # display_mode = window.GUI.slider_int("Value Range", some_int_type_value, 0, 5)
+    options.show_splats = window.GUI.checkbox("Show Splats", options.show_splats)
     window.GUI.end()
+
 
 
 @ti.kernel
@@ -51,10 +58,11 @@ def splat_transforms(splats:ti.template(), transforms:ti.template()):
     transforms[i] = m
 
     
-def intrinsic_matrix(camera, window):
+def intrinsic_matrix(hfov, window):
     width, height = window.get_window_shape()
-    fx = 1.0 / np.tan(camera.fov() * 0.5 * np.pi / 180.0)
-    fy = fx * width / height
+
+    fx = 1.0 / np.tan(hfov * 0.5 * np.pi / 180.0)
+    fy = fx * (height / width)
     cx = width * 0.5
     cy = height * 0.5
 
@@ -66,20 +74,31 @@ def intrinsic_matrix(camera, window):
    
 @ti.kernel
 def draw_splats(splats:ti.template(), image:ti.template(), intrinsic:tm.mat3, view:tm.mat4):
-  camera = Camera(image.shape, intrinsic)
+  camera = Camera(image.shape[:2], intrinsic)
 
-  for splat3d in splats:
-    splat2d = project_splat(splat3d, camera, view)
-    lower = ti.floor(splat2d.p - splat2d.radius, ti.i32)
-    upper = ti.ceil(splat2d.p + splat2d.radius, ti.i32)
-   
-    for x, y in ti.ndrange(lower, upper):
+  for p in ti.grouped(ti.ndrange(image.shape[0], image.shape[1])):
+    image[p] = 0.0
+
+  for i in splats:
+    splat2d = project_splat(splats[i], camera, view)
+    if splat2d.depth < 0.0:
+      continue
+
+    radius = 50
+    lower = ti.max(ti.floor(splat2d.uv - radius, ti.i32), 0)
+    upper = ti.min(ti.ceil(splat2d.uv + radius, ti.i32), tm.ivec2(image.shape[:2]) - 1)
+    # print(i, splat2d.uv, splat2d.radius, upper-lower)
+    
+    for x, y in ti.ndrange((lower.x, lower.y), (upper.x, upper.y)):
       xy = ti.math.vec2(x, y)
-      density = density_from_conic(xy, splat2d.p, splat2d.conic)
-      image[x, y] += splat2d.color * density * splat2d.opacity
+      density = density_from_conic(xy, splat2d.uv, splat2d.conic)
+
+      image[x, y] = splat2d.color #+= splat2d.color * density * splat2d.opacity
 
 def main():
-  ti.init(arch=ti.cuda)
+  ti.init(arch=ti.cuda, debug=True)
+
+  options = Options()
 
   window = ti.ui.Window("Display Mesh", (1024, 1024), vsync=True)
   canvas = window.get_canvas()
@@ -89,7 +108,11 @@ def main():
   camera.up(0, 1, 0)
   camera.position(0, 0, 10)
   # camera.lookat(0, 0, 0)
-  camera.fov(60)
+
+  hfov = 60
+  camera.fov(hfov)
+
+  w, h = window.get_window_shape()
 
   scene.set_camera(camera)
 
@@ -99,11 +122,12 @@ def main():
   transforms = ti.field(dtype=tm.mat4, shape=splats.shape[0])
   splat_transforms(splats, transforms)
 
+
   w, h = window.get_window_shape()
-  image = ti.field(dtype=ti.f32, shape=(w, h, 3))
+  image = ti.field(dtype=tm.vec3, shape=(w, h))
 
   while window.running:
-      intrinsic = intrinsic_matrix(camera, window)
+      intrinsic = intrinsic_matrix(hfov, window)
 
       draw_splats(splats, image,  intrinsic, camera.get_view_matrix())
 
@@ -117,11 +141,13 @@ def main():
       camera.track_user_inputs(window, movement_speed=0.03, hold_key=ti.ui.RMB)
       scene.set_camera(camera)
 
+      if options.show_splats:
+        canvas.set_image(image)
+      else:
+         canvas.scene(scene)
 
 
-
-      canvas.scene(scene)
-      show_options(window)
+      show_options(window, options)
       window.show()
 
 if __name__=="__main__":

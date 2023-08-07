@@ -8,8 +8,8 @@ from transform import quat_to_mat
 
 @ti.func
 def cov_to_conic_radius(
-    cov: tm.mat3,
-) -> Tuple[tm.vec3, tm.f32]:
+    cov: tm.mat2,
+): # -> Tuple[tm.vec3, ti.f32]:
 
   det_cov = cov.determinant()
   inv_cov = (1. / det_cov) * \
@@ -23,7 +23,7 @@ def cov_to_conic_radius(
   lambda2 = mid - ti.sqrt(max(0.1, mid * mid - det_cov))
   radius =  3.0 * ti.sqrt(max(lambda1, lambda2))
 
-  return conic, radius
+  return (conic, radius)
 
 
 
@@ -43,7 +43,9 @@ def density_from_conic(
 
 @ti.dataclass
 class Splat2D:
-    p: ti.math.vec2
+    uv: ti.math.vec2
+    depth : ti.f32
+    
     conic : ti.math.vec3
     radius : ti.f32
 
@@ -53,7 +55,7 @@ class Splat2D:
         
     @ti.func
     def from_vec(self, v:ti.template()):
-        self.p = v[0:2]
+        self.uv = v[0:2]
         self.conic = v[2:5]
         self.radius = v[5]
         self.color = v[6:9]
@@ -67,7 +69,7 @@ def project_splat(
     world_to_camera: tm.mat4,
 ) -> Splat2D:
       
-  p = world_to_camera @ tm.vec4(splat.p, 1.0)
+  p = (world_to_camera @ tm.vec4(splat.p, 1.0)).xyz
   f = camera.focal_length()
 
   J = tm.mat3(
@@ -75,12 +77,17 @@ def project_splat(
     0.0, f.y / p.z, -(f.y * p.y) / (p.z * p.z),
     0, 0, 0)
   
-  axes = splat.scale * (world_to_camera[:3, :3] @ quat_to_mat(splat.q))
-  sigma = axes @ axes.T
+  scaling = ti.Matrix.cols([splat.scale, splat.scale, splat.scale])
 
-  cov_2d = J @ sigma @ J.T
+  axes = scaling * (world_to_camera[:3, :3] @ quat_to_mat(splat.q))
+
+
+  # J @ axes @ axes^T @ J^T
+  m = J @ axes 
+  cov_2d = m @ m.transpose() 
+
   uv = camera.image_t_camera @ p
 
-  conic, radius = cov_to_conic_radius(cov_2d)
+  conic, radius = cov_to_conic_radius(cov_2d[:2,:2])
 
-  return Splat2D(uv.xy / uv.z, conic, radius, splat.color, splat.opacity)
+  return Splat2D(uv.xy / uv.z, uv.z, conic, radius, splat.color, splat.opacity)
