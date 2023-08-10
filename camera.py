@@ -11,3 +11,4 @@ class Camera:
     @ti.func
     def focal_length(self):
         return tm.vec2(self.image_t_camera[0, 0], self.image_t_camera[1, 1])
+    

@@ -11,6 +11,7 @@ from camera import Camera
 from rand import random_splats
 from scipy.spatial.transform import Rotation as R
 from splat_2d import Splat2D, density_from_conic, project_splat
+from splat_3d import Gaussian3D, eval_gaussian, ray_gaussian_3d, to_gaussian_3d, to_gaussians_3d
 
 from transform import quat_to_mat, scaling
 
@@ -34,13 +35,19 @@ def sphere_mesh(n, radius=1.0):
 @dataclass
 class Options:
    show_splats: bool = False
+   trace_splats: bool = False
 
 
 def show_options(window, options):
 
     window.GUI.begin("Display Panel", 0.05, 0.1, 0.2, 0.15)
     # display_mode = window.GUI.slider_int("Value Range", some_int_type_value, 0, 5)
+    
     options.show_splats = window.GUI.checkbox("Show Splats", options.show_splats)
+    options.trace_splats = window.GUI.checkbox("Trace Splats", options.trace_splats)
+
+    
+    
     window.GUI.end()
 
 
@@ -85,7 +92,6 @@ def draw_splats(splats:ti.template(), image:ti.template(),
   # for p in ti.grouped(ti.ndrange(image.shape[0], image.shape[1])):
   #   image[p] = 0.0
 
-
   for i in splats:
     splat2d = project_splat(splats[i], camera, view)
     if splat2d.depth < near:
@@ -101,6 +107,31 @@ def draw_splats(splats:ti.template(), image:ti.template(),
       density = ti.cast(density > 0.01, ti.f32)
       image[x, y] = tm.mix(image[x, y], splat2d.color, density)# density * splat2d.opacity)
 
+
+
+@ti.kernel
+def trace_splats(gaussians:ti.template(), image:ti.template(), 
+                intrinsic:tm.mat3, near:ti.f32):
+  camera = Camera(image.shape[:2], intrinsic)
+  w, h = image.shape[:2]
+
+  unproj = camera.image_t_camera.inverse()
+  
+  for x, y in ti.ndrange(w, h):
+    for i in range(gaussians.shape[0]):
+      pixel = tm.vec3(x, y, 1.0)
+      d = tm.normalize(unproj @ pixel)
+
+      g = gaussians[i]
+      t = ray_gaussian_3d(d, g)
+
+      if t > near:
+        density = eval_gaussian(d * t, g.mean, g.inv_sigma)
+        image[x, y] = tm.mix(image[x, y], g.color, density)
+
+
+      # density = ti.cast(density > 0.01, ti.f32)
+      # image[p] = tm.mix(image[p], splat2d.color, density)
 
 @ti.kernel
 def make_checkerboard(image:ti.template(), size:ti.template()):
@@ -143,6 +174,8 @@ def main():
   transforms = ti.field(dtype=tm.mat4, shape=splats.shape[0])
   splat_transforms(splats, transforms)
 
+  gaussians_3d = Gaussian3D.field(shape=splats.shape[0])
+
 
   w, h = window.get_window_shape()
   image = ti.field(dtype=tm.vec3, shape=(w, h))
@@ -150,12 +183,11 @@ def main():
   while window.running:
       intrinsic = intrinsic_matrix(hfov, window)
 
-      m = diag_matrix([1, 1, -1, 1]) @ tm.mat4(camera.get_view_matrix()).transpose()
+      # Flipped to use +z as forward where OpenGL uses -z 
+      camera_T_world = diag_matrix([1, 1, -1, 1]) @ tm.mat4(camera.get_view_matrix()).transpose()
 
 
       make_checkerboard(image, 32)
-      draw_splats(splats, image,  intrinsic, m, near=0.5)
-      # print(camera.get_view_matrix().T)
 
       scene.ambient_light([0.2, 0.2, 0.2])
       scene.point_light(pos=[0, 10, 10], color=[1.0, 1.0, 1.0])
@@ -168,7 +200,11 @@ def main():
       scene.set_camera(camera)
 
       if options.show_splats:
+        draw_splats(splats, image,  intrinsic, camera_T_world, near=0.5)
         canvas.set_image(image)
+      elif options.trace_splats:
+        to_gaussians_3d(splats, camera_T_world, gaussians_3d)
+        trace_splats(gaussians_3d, image,  intrinsic, near=0.5)
       else:
          canvas.scene(scene)
 

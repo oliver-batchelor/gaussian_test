@@ -66,11 +66,11 @@ class Splat2D:
 def project_splat(
     splat: Splat3D,
     camera: Camera,
-    world_to_camera: tm.mat4,
+    camera_T_world: tm.mat4,
 ) -> Splat2D:
   
       
-  p = (world_to_camera @ tm.vec4(splat.p, 1.0)).xyz
+  p = (camera_T_world @ tm.vec4(splat.p, 1.0)).xyz
   f = camera.focal_length()
 
   J = tm.mat3(
@@ -80,7 +80,7 @@ def project_splat(
   
     
   scale = scaling(splat.scale)
-  axes = (world_to_camera[:3, :3].inverse().transpose() @ (quat_to_mat(splat.q) @ scale))
+  axes = (camera_T_world[:3, :3] @ (quat_to_mat(splat.q) @ scale))
 
   # J @ axes @ axes^T @ J^T
   m = J @ axes 
