@@ -76,20 +76,19 @@ def project_splat(
   J = tm.mat3(
     f.x / p.z, 0.0, -(f.y * p.x) / (p.z * p.z),
     0.0, f.y / p.z, -(f.y * p.y) / (p.z * p.z),
-    0, 0, 0)
+    0, 0, 1.0)
   
+    
   scale = scaling(splat.scale)
   axes = (world_to_camera[:3, :3].inverse().transpose() @ (quat_to_mat(splat.q) @ scale))
 
-
   # J @ axes @ axes^T @ J^T
   m = J @ axes 
-  cov_2d = m @ m.transpose() 
-
-  uv = camera.image_t_camera @ p
+  cov_2d = m @ m.transpose()
 
   print(cov_2d)
 
+  uv = camera.image_t_camera @ p
   conic, radius = cov_to_conic_radius(cov_2d[:2,:2])
 
   return Splat2D(uv.xy / uv.z, uv.z, conic, radius, splat.color, splat.opacity)

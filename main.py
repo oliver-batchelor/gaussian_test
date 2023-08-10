@@ -98,7 +98,8 @@ def draw_splats(splats:ti.template(), image:ti.template(),
       xy = ti.math.vec2(x, y)
       density = density_from_conic(xy, splat2d.uv, splat2d.conic)
 
-      image[x, y] = tm.mix(image[x, y], splat2d.color, density * splat2d.opacity)
+      density = ti.cast(density > 0.01, ti.f32)
+      image[x, y] = tm.mix(image[x, y], splat2d.color, density)# density * splat2d.opacity)
 
 
 @ti.kernel
@@ -137,7 +138,7 @@ def main():
   scene.set_camera(camera)
 
   sphere_vertices, sphere_indices = sphere_mesh(16)
-  splats = random_splats(10)
+  splats = random_splats(1)
 
   transforms = ti.field(dtype=tm.mat4, shape=splats.shape[0])
   splat_transforms(splats, transforms)
